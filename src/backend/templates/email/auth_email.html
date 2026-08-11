@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify Your Email - Clinic Modernization Platform</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        .header { background: #0056b3; padding: 24px; text-align: center; color: #ffffff; }
+        .header h1 { margin: 0; font-size: 24px; font-weight: 600; }
+        .content { padding: 32px 24px; font-size: 16px; line-height: 1.6; }
+        .button-container { text-align: center; margin: 30px 0; }
+        .btn { display: inline-block; background-color: #0056b3; color: #ffffff !important; text-decoration: none; padding: 14px 32px; border-radius: 6px; font-weight: bold; font-size: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .footer { background: #f8f9fa; padding: 16px 24px; text-align: center; font-size: 13px; color: #6c757d; border-top: 1px solid #eeeeee; }
+        .token-link { word-break: break-all; color: #0056b3; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Clinic Modernization Platform</h1>
+        </div>
+        <div class="content">
+            <p>Hello <strong>{{ full_name }}</strong>,</p>
+            <p>Thank you for registering with the Clinic Modernization Platform. Please click the button below to verify your email address and create your account password:</p>
+            
+            <div class="button-container">
+                <a href="{{ verification_url }}" class="btn" target="_blank">Verify Email & Create Password</a>
+            </div>
+
+            <p>This verification link will expire in <strong>60 minutes</strong> and can only be used once.</p>
+            <p>If you did not initiate this request, please ignore this email.</p>
+
+            <hr style="border: none; border-top: 1px solid #eeeeee; margin: 24px 0;">
+            <p style="font-size: 13px; color: #6c757d;">If the button above does not work, copy and paste this URL into your browser:</p>
+            <p class="token-link"><a href="{{ verification_url }}">{{ verification_url }}</a></p>
+        </div>
+        <div class="footer">
+            &copy; 2026 Clinic Modernization Platform. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>
