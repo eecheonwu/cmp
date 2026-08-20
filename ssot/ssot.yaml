@@ -1,0 +1,10 @@
+project_id: d2226d1e-f013-47ba-ad2b-bd3d1b829af0
+version: 1.0.0
+last_synced: ""
+description: "Local Engineering SSOT synchronized from EIP Web App"
+directories:
+  requirements: "SRDs and business requirements"
+  architecture: "ADRs, C4, and UML diagrams"
+  system: "Knowledge Graph and technical specifications"
+  testing: "Test specifications and coverage"
+  agents: "AI Agent context packages"
