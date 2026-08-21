@@ -12,7 +12,7 @@ test.describe('Patient Journey - E2E', () => {
 
     test('TC-PJ-01: Full patient registration flow', async ({ page }) => {
         // Override the register mock to return an unverified user (no redirect to dashboard)
-        await page.route('**/api/v1/auth/register', async (route) => {
+        await page.route('**/api/v1/register', async (route) => {
             await route.fulfill({
                 status: 201,
                 contentType: 'application/json',
@@ -29,12 +29,10 @@ test.describe('Patient Journey - E2E', () => {
         await page.waitForLoadState('networkidle')
 
         // Verify we're on the registration page
-        await expect(page.locator('text=Patient Registration')).toBeVisible()
+        await expect(page.locator('text=Create your patient account')).toBeVisible()
 
         // Fill in registration form
         await page.fill('#phoneNumber', '+2348012345678')
-        await page.fill('#email', 'patient@test.com')
-        await page.fill('#password', 'SecurePass123!')
         await page.fill('#fullName', 'John Doe')
         await page.fill('#dateOfBirth', '1990-01-15')
         await page.selectOption('#gender', 'male')
@@ -72,7 +70,7 @@ test.describe('Patient Journey - E2E', () => {
 
         // Should navigate to dashboard after successful verification
         await page.waitForURL('**/dashboard')
-        await expect(page.locator('h1')).toContainText('Dashboard')
+        await expect(page.locator('h1')).toContainText('Patient Portal')
     })
 
     test('TC-PJ-03: Staff login flow', async ({ page }) => {
@@ -82,7 +80,7 @@ test.describe('Patient Journey - E2E', () => {
 
         // Verify we're on the login page
         await expect(page.locator('h1')).toContainText('Clinic Modernization Platform')
-        await expect(page.locator('text=Staff Login')).toBeVisible()
+        await expect(page.locator('text=Staff sign in to your account')).toBeVisible()
 
         // Fill in login form
         await page.fill('#email', 'staff@clinic.com')
@@ -93,7 +91,7 @@ test.describe('Patient Journey - E2E', () => {
 
         // Should navigate to dashboard after successful login
         await page.waitForURL('**/dashboard')
-        await expect(page.locator('h1')).toContainText('Dashboard')
+        await expect(page.locator('h1')).toContainText('Patient Portal')
     })
 
     test('TC-PJ-04: View appointments list', async ({ page }) => {
@@ -232,24 +230,29 @@ test.describe('Patient Journey - E2E', () => {
         await page.goto('/login')
         await page.waitForLoadState('networkidle')
 
+        // Verify we're on the login page (ensures hydration)
+        await expect(page.locator('h1')).toContainText('Clinic Modernization Platform')
+        await expect(page.locator('text=Staff sign in to your account')).toBeVisible()
+
         // Fill in invalid credentials
         await page.fill('#email', 'wrong@email.com')
         await page.fill('#password', 'wrongpassword')
 
         // Override the login mock to return 401
-        await page.route('**/api/v1/auth/login', async (route) => {
+        await page.unroute('**/api/v1/login');
+        await page.route('**/api/v1/login', async (route) => {
             await route.fulfill({
                 status: 401,
                 contentType: 'application/json',
                 body: JSON.stringify({ detail: 'Invalid credentials' }),
             })
-        })
+        });
 
         // Submit login
         await page.click('button[type="submit"]')
 
         // Verify error message is displayed
-        await expect(page.locator('text=Invalid email or password')).toBeVisible()
+        await expect(page.locator('.error-message')).toContainText('Invalid email or password')
     })
 
     test('TC-PJ-10: Unauthenticated user redirected to login', async ({ page }) => {

@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  # Production uses external AWS services, not LocalStack
+  backend:
+    environment:
+      - ENVIRONMENT=production
+    command: >
+      sh -c "
+        alembic upgrade head &&
+        uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+      "
+    restart: unless-stopped
+
+  celery-worker:
+    environment:
+      - ENVIRONMENT=production
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./src/frontend
+      dockerfile: Dockerfile.prod
+      target: production
+    environment:
+      - VITE_API_URL=/api
+    ports:
+      - "80:80"
+    restart: unless-stopped
+
+  # Remove development tools
+  adminer:
+    profiles: [ "admin" ]

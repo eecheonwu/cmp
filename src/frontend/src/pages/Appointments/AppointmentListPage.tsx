@@ -51,11 +51,39 @@ export function AppointmentListPage() {
     const [error, setError] = useState<string | null>(null)
     const [cancellingId, setCancellingId] = useState<string | null>(null)
     const [showCancelConfirm, setShowCancelConfirm] = useState<string | null>(null)
+    const [isOffline, setIsOffline] = useState(!navigator.onLine)
     const { user, logout } = useAuth()
     const navigate = useNavigate()
 
     useEffect(() => {
         loadAppointments()
+    }, [])
+
+    // Listen for online/offline events to reload data from cache or API
+    useEffect(() => {
+        const handleOffline = async () => {
+            setIsOffline(true)
+            // Immediately load from IndexedDB cache when going offline
+            const cached = await getCachedAppointments()
+            if (cached.length > 0) {
+                setAppointments(cached)
+                setError(null)
+            }
+        }
+
+        const handleOnline = () => {
+            setIsOffline(false)
+            // Re-fetch from API when back online
+            loadAppointments()
+        }
+
+        window.addEventListener('offline', handleOffline)
+        window.addEventListener('online', handleOnline)
+
+        return () => {
+            window.removeEventListener('offline', handleOffline)
+            window.removeEventListener('online', handleOnline)
+        }
     }, [])
 
     const loadAppointments = async () => {

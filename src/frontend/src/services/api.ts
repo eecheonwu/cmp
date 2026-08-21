@@ -30,9 +30,13 @@ apiClient.interceptors.response.use(
     },
     (error) => {
         if (error.response?.status === 401) {
-            // Clear token and redirect to login
-            clearToken()
-            window.location.href = '/login'
+            // Don't redirect if this is an auth request (login/register)
+            const isAuthRequest = error.config?.url?.includes('/login') || error.config?.url?.includes('/register')
+            if (!isAuthRequest) {
+                // Clear token and redirect to login
+                clearToken()
+                window.location.href = '/login'
+            }
         }
         return Promise.reject(error)
     }

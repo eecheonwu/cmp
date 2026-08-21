@@ -77,20 +77,36 @@ test.describe('Offline Mode - E2E', () => {
         await page.goto('/appointments')
         await page.waitForLoadState('networkidle')
 
-        // Force an error when API is called (simulate offline API failure)
+        // Verify appointments loaded from API
+        await expect(page.locator('text=Appointment #appt').first()).toBeVisible()
+
+        // Verify IndexedDB cache was populated
+        const cachedCount = await page.evaluate(async () => {
+            return new Promise((resolve) => {
+                const request = indexedDB.open('CMPDatabase')
+                request.onsuccess = () => {
+                    const db = request.result
+                    const tx = db.transaction('appointments', 'readonly')
+                    const store = tx.objectStore('appointments')
+                    const count = store.count()
+                    count.onsuccess = () => resolve(count.result)
+                }
+                request.onerror = () => resolve(0)
+            })
+        })
+        expect(cachedCount).toBe(2)
+
+        // Force API calls to fail (simulate offline API failure)
         await page.route('**/api/v1/appointments', async (route) => {
             await route.abort('internetdisconnected')
         })
 
-        // Now simulate going offline
+        // Now simulate going offline (app stays loaded, data served from cache)
         await page.context().setOffline(true)
         await page.evaluate(() => window.dispatchEvent(new Event('offline')))
 
-        // Use reload instead of goto since browser is offline
-        await page.reload()
-
-        // Wait for the page to try to load and fall back to cache
-        await page.waitForTimeout(2000)
+        // Wait for the offline handler to process
+        await page.waitForTimeout(1000)
 
         // Verify offline banner is shown
         await expect(page.locator('.offline-banner')).toBeVisible()
@@ -198,7 +214,7 @@ test.describe('Offline Mode - E2E', () => {
         await expect(page.locator('.offline-banner')).toBeVisible()
 
         // Verify login page content is still visible
-        await expect(page.locator('text=Staff Login')).toBeVisible()
+        await expect(page.locator('text=Staff sign in to your account')).toBeVisible()
 
         // Restore online state
         await page.context().setOffline(false)

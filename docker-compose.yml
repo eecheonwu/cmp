@@ -1,0 +1,142 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: cmp-postgres
+    environment:
+      POSTGRES_USER: cmp_user
+      POSTGRES_PASSWORD: cmp_password
+      POSTGRES_DB: cmp_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U cmp_user -d cmp_db" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cmp-network
+
+  # Redis for Celery and rate limiting
+  redis:
+    image: redis:7-alpine
+    container_name: cmp-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cmp-network
+
+  # LocalStack for AWS service mocking (KMS, S3, etc.)
+  # Using legacy version that doesn't require a license
+  localstack:
+    image: localstack/localstack:3.8
+    container_name: cmp-localstack
+    environment:
+      - SERVICES=kms,secretsmanager,sts
+      - DEBUG=1
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    ports:
+      - "4566:4566"
+    volumes:
+      - localstack_data:/tmp
+      - ./localstack-setup:/tmp/localstack-setup
+    networks:
+      - cmp-network
+
+  # Backend API
+  backend:
+    build:
+      context: ./src/backend
+      dockerfile: Dockerfile
+    container_name: cmp-backend
+    env_file:
+      - .env.docker
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://cmp_user:cmp_password@postgres:5432/cmp_db
+      - REDIS_URL=redis://redis:6379/0
+      - AWS_ENDPOINT_URL=http://localstack:4566
+    volumes:
+      - ./src/backend:/app
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
+      - ./logs:/app/logs
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "
+        alembic upgrade head &&
+        python seed.py &&
+        uvicorn main:app --host 0.0.0.0 --port 8000
+      "
+    networks:
+      - cmp-network
+
+  # Celery Worker
+  celery-worker:
+    build:
+      context: ./src/backend
+      dockerfile: Dockerfile
+    container_name: cmp-celery-worker
+    env_file:
+      - .env.docker
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://cmp_user:cmp_password@postgres:5432/cmp_db
+      - REDIS_URL=redis://redis:6379/0
+      - AWS_ENDPOINT_URL=http://localstack:4566
+    volumes:
+      - ./src/backend:/app
+    depends_on:
+      - backend
+    command: celery -A workers.celery_app worker --loglevel=info
+    networks:
+      - cmp-network
+
+  # Frontend Development Server
+  frontend:
+    build:
+      context: ./src/frontend
+      dockerfile: Dockerfile
+    container_name: cmp-frontend
+    environment:
+      - VITE_API_URL=http://localhost:8000/api/v1
+    volumes:
+      - ./src/frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    networks:
+      - cmp-network
+
+  # Adminer for database management (optional)
+  adminer:
+    image: adminer
+    container_name: cmp-adminer
+    ports:
+      - "8080:8080"
+    networks:
+      - cmp-network
+
+volumes:
+  postgres_data:
+  localstack_data:
+
+networks:
+  cmp-network:
+    driver: bridge

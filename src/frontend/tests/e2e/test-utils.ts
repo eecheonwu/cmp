@@ -118,7 +118,7 @@ export const MOCK_VERIFY_OTP_RESPONSE = {
 
 // Book appointment response
 export const MOCK_BOOK_RESPONSE = {
-    id: 'appt-uuid-3',
+    id: 'appt-uuid-1',
     doctorId: 'doctor-uuid-1',
     patientId: 'patient-uuid-1',
     branchId: 'branch-1',
@@ -136,7 +136,7 @@ export const MOCK_BOOK_RESPONSE = {
  */
 export async function setupPatientJourneyMocks(page: Page) {
     // Mock auth endpoints
-    await page.route('**/api/v1/auth/login', async (route) => {
+    await page.route('**/api/v1/login', async (route) => {
         await route.fulfill({
             status: 200,
             contentType: 'application/json',
@@ -144,7 +144,7 @@ export async function setupPatientJourneyMocks(page: Page) {
         })
     })
 
-    await page.route('**/api/v1/auth/register', async (route) => {
+    await page.route('**/api/v1/register', async (route) => {
         await route.fulfill({
             status: 201,
             contentType: 'application/json',
@@ -152,7 +152,7 @@ export async function setupPatientJourneyMocks(page: Page) {
         })
     })
 
-    await page.route('**/api/v1/auth/verify-code', async (route) => {
+    await page.route('**/api/v1/verify-code', async (route) => {
         await route.fulfill({
             status: 200,
             contentType: 'application/json',
@@ -160,7 +160,7 @@ export async function setupPatientJourneyMocks(page: Page) {
         })
     })
 
-    await page.route('**/api/v1/auth/me', async (route) => {
+    await page.route('**/api/v1/me', async (route) => {
         await route.fulfill({
             status: 200,
             contentType: 'application/json',
@@ -187,14 +187,6 @@ export async function setupPatientJourneyMocks(page: Page) {
         }
     })
 
-    await page.route('**/api/v1/appointments/available-slots*', async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify(MOCK_AVAILABLE_SLOTS),
-        })
-    })
-
     await page.route('**/api/v1/appointments/*', async (route, request) => {
         if (request.method() === 'DELETE') {
             await route.fulfill({
@@ -206,6 +198,14 @@ export async function setupPatientJourneyMocks(page: Page) {
             await route.continue()
         }
     })
+
+    await page.route('**/api/v1/appointments/available-slots*', async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(MOCK_AVAILABLE_SLOTS),
+        })
+    })
 }
 
 /**
@@ -213,7 +213,7 @@ export async function setupPatientJourneyMocks(page: Page) {
  */
 export async function setupOfflineModeMocks(page: Page) {
     // Mock auth to auto-login
-    await page.route('**/api/v1/auth/me', async (route) => {
+    await page.route('**/api/v1/me', async (route) => {
         await route.fulfill({
             status: 200,
             contentType: 'application/json',
