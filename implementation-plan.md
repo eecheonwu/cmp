@@ -1,257 +1,188 @@
-# Clinic Modernization Platform (CMP) — Implementation Plan
+# Implementation Plan: Clinic Modernization Platform (CMP)
 
-This document serves as the authoritative, exhaustive Implementation Plan for the Clinic Modernization Platform (CMP). It is designed to guide engineering teams and coding agents through the architectural boundaries, data models, security policies, and step-by-step execution strategy required to deliver the Phase 1 MVP within the mandated 4-month timeline.
-
----
-
-## Table of Contents
-1. [High-Level System Architecture & Component Boundaries](#1-high-level-system-architecture--component-boundaries)
-2. [Core Data Models & Database Schemas](#2-core-data-models--database-schemas)
-3. [API Contracts & Inter-Service Communication](#3-api-contracts--inter-service-communication)
-4. [Security Policies, Threat Models & Authentication](#4-security-policies-threat-models--authentication)
-5. [Phased Implementation Strategy (4-Month Timeline)](#5-phased-implementation-strategy-4-month-timeline)
-6. [Critical Technical Decisions & Trade-offs](#6-critical-technical-decisions--trade-offs)
+**Document Status:** Approved  
+**Target Audience:** Engineering Leads, Full-Stack Developers, DevOps Engineers, QA Automation Engineers  
+**Objective:** Provide an exhaustive, actionable blueprint for coding agents and human engineers to build, test, and deploy the Phase 1 MVP of the Clinic Modernization Platform within the 4-month timeline.
 
 ---
 
 ## 1. High-Level System Architecture & Component Boundaries
 
-The CMP utilizes a decoupled, cloud-native architecture optimized for low-bandwidth environments, offline resiliency, and strict data privacy.
+The CMP is architected as a decoupled, cloud-native system prioritizing offline resilience, transactional integrity, and strict data privacy. 
 
-### 1.1 Component Boundaries
+### 1.1 Architectural Tiers
+1. **Client Tier (Edge/Browser)**: A Progressive Web App (PWA) built with **Vite + React**. It utilizes **Workbox** for Service Worker asset caching and **Dexie.js** (IndexedDB) for local read-only data storage to survive 2-hour local internet outages (NFR-004). Hosted statically on **AWS S3** and served via **Amazon CloudFront**.
+2. **API Gateway Tier**: **AWS API Gateway** handles rate-limiting, TLS 1.3 termination, and routes RESTful traffic to the backend.
+3. **Application Tier**: An asynchronous **FastAPI (Python 3.12)** backend running in containerized environments (e.g., AWS ECS/Fargate). It handles RBAC, business logic, and cryptographic operations.
+4. **Data & Storage Tier**: A managed **PostgreSQL 16+** instance (AWS RDS) acting as the primary ACID-compliant datastore.
+5. **Background Processing Tier**: **Redis** acts as a message broker for **Celery** workers, which handle asynchronous tasks like the pluggable notification failover chain.
+6. **External Integrations**: AWS KMS (Key Management Service), WhatsApp Business Cloud API, Termii SMS, and Infobip SMS.
 
-*   **Frontend (Client Tier)**: A Progressive Web App (PWA) built with **React + Vite**. It uses **Workbox** for Service Worker asset caching and **Dexie.js** (IndexedDB) to cache daily schedules for 2-hour offline read-only access. Hosted statically on **AWS S3 + CloudFront**.
-*   **Backend (API Tier)**: An asynchronous **FastAPI (Python 3.12)** application. It handles routing, RBAC validation, scheduling logic, and cryptographic operations. Hosted on **AWS ECS (Fargate)** or **AWS App Runner** behind an API Gateway.
-*   **Background Processing (Worker Tier)**: A **Celery** worker pool backed by a **Redis** message broker. It handles the pluggable notification failover chain (WhatsApp → Termii → Infobip) and asynchronous audit logging.
-*   **Data Tier**: A managed **PostgreSQL 16+** instance (AWS RDS) acting as the primary ACID-compliant datastore.
-*   **Security Tier**: **AWS KMS** provides envelope encryption keys for application-level column encryption of clinical records.
-
-### 1.2 Architecture Diagram
+### 1.2 Container Architecture Diagram
 
 ```mermaid
 graph TD
     subgraph Client Tier
-        PWA[React PWA / Vite]
-        Cache[(IndexedDB / Dexie.js)]
-        PWA <--> Cache
+        PWA[React PWA Client<br/>Vite / Dexie.js / Workbox]
     end
 
-    subgraph Edge Tier
-        CDN[AWS CloudFront]
-        WAF[AWS WAF / API Gateway]
+    subgraph AWS Edge
+        CDN[CloudFront CDN]
+        APIGW[API Gateway]
     end
 
     subgraph Application Tier
-        API[FastAPI Backend]
-        Workers[Celery Workers]
-        Redis[(Redis Queue)]
+        FastAPI[FastAPI Backend<br/>Uvicorn / Python 3.12]
+        Celery[Celery Workers<br/>Async Task Processing]
     end
 
-    subgraph Data & Security Tier
-        DB[(PostgreSQL 16+)]
-        KMS[AWS KMS]
+    subgraph Data Tier
+        RDS[(PostgreSQL 16+<br/>AWS RDS)]
+        Redis[(Redis<br/>Task Queue & Cache)]
     end
 
-    subgraph External Integrations
+    subgraph External Services
+        KMS[AWS KMS<br/>Envelope Encryption]
         WA[WhatsApp Cloud API]
-        Termii[Termii SMS]
-        Infobip[Infobip SMS]
+        Termii[Termii SMS Gateway]
+        Infobip[Infobip SMS Gateway]
     end
 
     PWA -->|Static Assets| CDN
-    PWA -->|HTTPS REST| WAF
-    WAF --> API
-    API -->|Pessimistic Locks| DB
-    API -->|Envelope Encrypt/Decrypt| KMS
-    API -->|Enqueue Tasks| Redis
-    Redis --> Workers
-    Workers --> WA
-    Workers --> Termii
-    Workers --> Infobip
+    PWA -->|HTTPS REST| APIGW
+    APIGW --> FastAPI
+    FastAPI -->|SQLAlchemy / Locks| RDS
+    FastAPI -->|Generate/Decrypt DEK| KMS
+    FastAPI -->|Enqueue Tasks| Redis
+    Redis --> Celery
+    Celery -->|Primary| WA
+    Celery -->|Fallback 1| Termii
+    Celery -->|Fallback 2| Infobip
 ```
 
 ---
 
 ## 2. Core Data Models & Database Schemas
 
-The database schema is designed in PostgreSQL to support pessimistic locking for concurrency control and application-level encryption for NDPR compliance.
+The system uses **PostgreSQL** to enforce relational integrity and utilize pessimistic locking (`SELECT ... FOR UPDATE`) to prevent concurrent booking race conditions (FR-019).
 
-### 2.1 Key Entities & Relationships
+### 2.1 Schema Definitions (SQLAlchemy / SQLModel)
 
-1.  **`users`**: Base table for authentication and RBAC. Contains `role` enum (`patient`, `receptionist`, `doctor`, `manager`, `admin`).
-2.  **`patient_profiles`**: Confidential demographic data linked 1:1 to `users`.
-3.  **`doctor_availability`**: Time-bound shift blocks. Includes `start_datetime`, `end_datetime`, and `branch_id`.
-4.  **`appointments`**: The core scheduling entity. Links `patient_id`, `doctor_id`, and `branch_id`. Includes `status` and `payment_state` (for Phase 2 compatibility).
-5.  **`clinical_records`**: Restricted medical data. Fields like `encrypted_notes` and `encrypted_diagnosis` store AES-256-GCM ciphertext.
-6.  **`security_audit_logs`**: Immutable append-only table tracking all clinical data access and scheduling overrides.
-7.  **`verification_otps`**: Tracks multi-channel OTP delivery states.
+*   **`users`**: Base authentication table.
+    *   *Columns*: `id` (UUID), `phone_number` (Unique), `email` (Unique), `password_hash`, `role` (Enum), `created_at`.
+*   **`patient_profiles`**: NDPR-protected PII.
+    *   *Columns*: `id`, `user_id` (FK), `full_name`, `date_of_birth`, `gender`, `emergency_contact`.
+*   **`doctor_availability`**: Time-bound shift blocks (FR-018).
+    *   *Columns*: `id`, `doctor_id` (FK), `branch_id`, `start_datetime`, `end_datetime`, `is_cancelled`.
+*   **`appointments`**: Core scheduling entity.
+    *   *Columns*: `id`, `doctor_id` (FK), `patient_id` (FK), `branch_id`, `start_datetime`, `end_datetime`, `status` (Enum), `payment_state` (Enum - INT-005), `booking_source`.
+*   **`clinical_records`**: Highly restricted medical data (NFR-008).
+    *   *Columns*: `id`, `appointment_id` (FK), `patient_id` (FK), `doctor_id` (FK), `encrypted_notes` (Text), `encrypted_diagnosis` (Text), `encrypted_prescriptions` (Text), `kms_key_version`.
+*   **`security_audit_logs`**: Immutable tracking (NFR-007).
+    *   *Columns*: `id`, `user_id`, `action_type`, `patient_id`, `ip_address`, `timestamp`, `action_details`.
+*   **`verification_otps`**: Channel-agnostic OTP tracking.
+    *   *Columns*: `id`, `phone_number`, `hashed_otp`, `attempts`, `is_used`, `expires_at`, `delivery_channel`.
 
-### 2.2 Concurrency Control (Pessimistic Locking)
-
-To satisfy **FR-019** (Server-Side Booking Validation), the database utilizes explicit row-level locks. Coding agents must implement this using SQLAlchemy's `with_for_update()`:
-
+### 2.2 Concurrency & Locking Strategy
+To satisfy **FR-019**, the backend must implement explicit row-level locking during the booking flow:
 ```python
-# Implementation standard for booking concurrency
-async with session.begin():
-    # 1. Lock the doctor's availability shift
-    shift = await session.execute(
-        select(DoctorAvailability)
-        .where(
-            DoctorAvailability.doctor_id == req.doctor_id,
-            DoctorAvailability.start_datetime <= req.start_datetime,
-            DoctorAvailability.end_datetime >= req.end_datetime,
-            DoctorAvailability.is_cancelled == False
-        )
-        .with_for_update() # Acquires SELECT ... FOR UPDATE lock
-    )
-    
-    # 2. Check for overlapping appointments (locked)
-    conflict = await session.execute(
-        select(Appointment)
-        .where(
-            Appointment.doctor_id == req.doctor_id,
-            Appointment.status == 'booked',
-            Appointment.start_datetime < req.end_datetime,
-            Appointment.end_datetime > req.start_datetime
-        )
-        .with_for_update()
-    )
-    
-    if conflict.first():
-        raise HTTPException(status_code=409, detail="Slot is no longer available.")
-        
-    # 3. Insert appointment and commit (releases locks)
+# SQLAlchemy Implementation Example
+shift = await session.execute(
+    select(DoctorAvailability)
+    .where(...)
+    .with_for_update() # Acquires pessimistic lock
+)
 ```
 
 ---
 
 ## 3. API Contracts & Inter-Service Communication
 
-Communication between the PWA and FastAPI backend is strictly RESTful over TLS 1.3. Background tasks communicate via Redis.
+The backend exposes a RESTful JSON API. All endpoints must be prefixed with `/api/v1/`.
 
-### 3.1 Core REST Endpoints
+### 3.1 Key REST Endpoints
 
-**1. Create Appointment**
-*   **Endpoint**: `POST /api/v1/appointments`
-*   **Auth**: Bearer Token (Roles: `patient`, `receptionist`, `manager`)
-*   **Payload**:
-    ```json
-    {
-      "doctor_id": "uuid",
-      "branch_id": "string",
-      "start_datetime": "ISO8601",
-      "end_datetime": "ISO8601",
-      "booking_source": "patient"
-    }
-    ```
-*   **Response**: `201 Created` with `appointment_id`.
+| Endpoint | Method | Auth Role | Description |
+| :--- | :--- | :--- | :--- |
+| `/auth/verify-request` | `POST` | Public | Initiates WhatsApp/SMS OTP flow. |
+| `/auth/login` | `POST` | Public | Returns JWT Access & Refresh tokens. |
+| `/appointments` | `POST` | Patient, Staff | Books an appointment. Triggers DB locks. |
+| `/appointments/{id}/cancel` | `PATCH` | Patient, Staff | Cancels appointment. Triggers penalty engine. |
+| `/clinical-records` | `POST` | Doctor | Encrypts and saves clinical notes. |
+| `/clinical-records/patient/{id}`| `GET` | Doctor | Decrypts and retrieves patient history. |
+| `/reports/daily` | `GET` | Manager, Admin | Returns branch utilization metrics. |
 
-**2. Submit Clinical Record**
-*   **Endpoint**: `POST /api/v1/clinical-records`
-*   **Auth**: Bearer Token (Roles: `doctor`)
-*   **Payload**:
-    ```json
-    {
-      "appointment_id": "uuid",
-      "patient_id": "uuid",
-      "notes": "Plaintext notes (encrypted in backend)",
-      "diagnosis": "Plaintext diagnosis (encrypted in backend)",
-      "prescriptions": "Plaintext prescriptions (encrypted in backend)"
-    }
-    ```
-*   **Response**: `201 Created` with `record_id`.
-
-### 3.2 Pluggable Notification Failover (Worker Contract)
-
-The system uses a Strategy Pattern for notifications. The FastAPI app pushes a generic `NotificationTask` to Redis. The Celery worker executes the failover chain:
-
-```mermaid
-flowchart LR
-    Task[Dequeue Notification Task] --> TryWA{Try WhatsApp API}
-    TryWA -->|Success| LogSuccess[Log Delivered]
-    TryWA -->|Timeout/Error| TryTermii{Try Termii SMS}
-    TryTermii -->|Success| LogSuccess
-    TryTermii -->|Timeout/Error| TryInfobip{Try Infobip SMS}
-    TryInfobip -->|Success| LogSuccess
-    TryInfobip -->|Error| LogFail[Log Failed]
-```
+### 3.2 Inter-Service Communication (Notification Failover)
+Communication between the FastAPI web nodes and Celery background workers occurs via **Redis**. 
+The system implements a **Strategy Pattern** for notifications (INT-004):
+1. FastAPI enqueues a generic `NotificationTask`.
+2. Celery worker picks up the task and attempts `WhatsAppCloudAPIClient.send()`.
+3. If timeout (>15s) or failure, worker catches the exception and executes `TermiiSMSClient.send()`.
+4. If Termii fails, worker executes `InfobipSMSClient.send()`.
 
 ---
 
-## 4. Security Policies, Threat Models & Authentication
+## 4. Security Policies, Threat Models & Auth Strategies
 
-### 4.1 Threat Model & Mitigations
+### 4.1 Authentication & Authorization (RBAC)
+*   **Strategy**: Stateless JWT (JSON Web Tokens) with short expiration (15 minutes) and HTTP-only secure refresh tokens (7 days).
+*   **RBAC**: Enforced via FastAPI `Security` dependencies (e.g., `Depends(RoleChecker(["doctor", "admin"]))`).
 
-| Threat | Vector | Mitigation Strategy |
+### 4.2 Application-Level Column Encryption (ADR-003)
+To satisfy **NFR-008** (DB Admins cannot read clinical data) and **NFR-006** (AES-256 Encryption):
+1. **Envelope Encryption**: FastAPI requests a Data Encryption Key (DEK) from AWS KMS.
+2. **Encryption**: FastAPI encrypts `notes`, `diagnosis`, and `prescriptions` in memory using AES-256-GCM.
+3. **Storage**: Only the ciphertext, Initialization Vector (IV), Auth Tag, and `kms_key_version` are stored in PostgreSQL.
+4. **IAM Isolation**: The AWS IAM role attached to the database administrators explicitly denies `kms:Decrypt` actions.
+
+### 4.3 Threat Model Mitigations
+*   **Threat**: Database Dump Leak.
+    *   *Mitigation*: Clinical records are ciphertext. Passwords are Argon2 hashed. OTPs are hashed.
+*   **Threat**: SMS Toll Fraud / OTP Spam.
+    *   *Mitigation*: Redis-backed rate limiting (max 3 requests / 15 mins per IP/Phone).
+*   **Threat**: Concurrent Booking Race Condition.
+    *   *Mitigation*: PostgreSQL `SELECT ... FOR UPDATE` locks.
+*   **Threat**: Insider Threat (Unauthorized Record Access).
+    *   *Mitigation*: Immutable `security_audit_logs` written in the same DB transaction as any read/write to `clinical_records`.
+
+---
+
+## 5. Phased Implementation Strategy
+
+### Phase 1: Infrastructure & Foundation (Weeks 1-2)
+*   **DevOps**: Provision AWS VPC, RDS (PostgreSQL), ElastiCache (Redis), KMS Keys, and S3/CloudFront distributions via Terraform/Pulumi.
+*   **Backend**: Scaffold FastAPI project, configure SQLAlchemy/Alembic, and establish CI/CD pipelines (GitHub Actions).
+*   **Database**: Create initial schema migrations for `users`, `patient_profiles`, and `verification_otps`.
+
+### Phase 2: Core Backend & Security (Weeks 3-6)
+*   **Auth**: Implement JWT authentication, RBAC middleware, and the OTP Generation Engine.
+*   **Scheduling Engine**: Build `appointments` and `doctor_availability` schemas. Implement the pessimistic locking logic for concurrent bookings.
+*   **Penalty Engine**: Implement the rolling 90-day cancellation penalty logic (Tier 1, 2, 3 restrictions).
+*   **Cryptography**: Implement the AWS KMS Envelope Encryption service for `clinical_records`. Ensure audit logs are generated per transaction.
+
+### Phase 3: Frontend PWA & Offline Sync (Weeks 7-10)
+*   **Setup**: Scaffold Vite + React application. Configure TailwindCSS and UI components (e.g., Radix UI).
+*   **PWA/Offline**: Configure `vite-plugin-pwa` and Workbox. Implement Dexie.js to sync the daily appointment schedule on login and cache it for offline read-only access.
+*   **Dashboards**: Build Patient self-service portal, Receptionist check-in view, and Doctor clinical workspace.
+
+### Phase 4: Integrations & Background Workers (Weeks 11-13)
+*   **Workers**: Setup Celery workers connected to Redis.
+*   **Notifications**: Implement the `NotificationService` interface. Build adapters for WhatsApp Cloud API, Termii, and Infobip.
+*   **Failover Logic**: Write the try/catch failover chain and test the 15-second timeout fallback mechanism.
+
+### Phase 5: Testing, UAT & Rollout (Weeks 14-16)
+*   **Testing**: Execute E2E tests (Cypress/Playwright), load testing (k6) to verify sub-2.0s search latency, and security penetration testing.
+*   **Pilot**: Deploy to Branch A (Pilot). Monitor offline caching behavior and notification delivery rates.
+*   **Scale**: Roll out to Branch B and Branch C.
+
+---
+
+## 6. Critical Technical Decisions, Trade-offs & Constraints
+
+| Decision | Trade-off / Constraint | Rationale |
 | :--- | :--- | :--- |
-| **Data Breach (Insider Threat)** | DB Admin accesses patient records. | **Application-Level Encryption**: Clinical notes are encrypted via AES-256-GCM before DB insertion. DB Admins only see ciphertext. |
-| **Race Conditions** | Concurrent booking requests. | **Pessimistic Locking**: `SELECT ... FOR UPDATE` ensures atomic slot reservation. |
-| **Account Takeover** | Brute-forcing OTPs. | **Rate Limiting & Expiry**: Max 5 attempts per OTP, 10-minute expiry, max 3 requests per 15 mins per IP/Phone. |
-| **Unauthorized Access** | Patient accessing doctor endpoints. | **Strict RBAC**: FastAPI `SecurityScopes` validate JWT role claims on every route. |
-
-### 4.2 Authentication & Authorization (RBAC)
-
-*   **Protocol**: Stateless JWT (JSON Web Tokens) with short expiration (1 hour) and HTTP-only refresh tokens (7 days).
-*   **Roles**: `patient`, `receptionist`, `doctor`, `manager`, `admin`, `executive`.
-*   **Implementation**: Use FastAPI's `Depends(Security(get_current_user, scopes=["doctor"]))`.
-
-### 4.3 Cryptographic Strategy (AWS KMS Envelope Encryption)
-
-To satisfy **NFR-006** and **NFR-008**:
-1.  FastAPI requests a Data Encryption Key (DEK) from AWS KMS (`GenerateDataKey`).
-2.  FastAPI encrypts the `notes`, `diagnosis`, and `prescriptions` using the plaintext DEK (AES-256-GCM).
-3.  FastAPI stores the ciphertext, the Initialization Vector (IV), the Auth Tag, and the *Encrypted* DEK (or KMS Key Version ID) in PostgreSQL.
-4.  The plaintext DEK is immediately wiped from application memory.
-
----
-
-## 5. Phased Implementation Strategy (4-Month Timeline)
-
-This step-by-step plan is designed for execution by engineering teams and coding agents.
-
-### Phase 1: Foundation & Infrastructure (Weeks 1-3)
-*   **Step 1.1**: Provision AWS Infrastructure (VPC, RDS PostgreSQL 16, ElastiCache Redis, KMS Keys).
-*   **Step 1.2**: Initialize FastAPI project structure (routers, services, models, schemas).
-*   **Step 1.3**: Implement SQLAlchemy ORM models and Alembic migrations based on the ERD.
-*   **Step 1.4**: Implement JWT Authentication, RBAC middleware, and the Channel-Agnostic OTP Verification Engine.
-
-### Phase 2: Scheduling Engine & Concurrency (Weeks 4-6)
-*   **Step 2.1**: Build `DoctorAvailability` CRUD endpoints for time-bound shifts.
-*   **Step 2.2**: Implement the `create_booking` service with PostgreSQL pessimistic locking (`with_for_update()`).
-*   **Step 2.3**: Develop the Progressive Cancellation Penalty Engine (Tier 1 to Tier 3 logic based on rolling 90-day incident counts).
-*   **Step 2.4**: Implement Administrative Overrides and Emergency Exemptions with audit logging.
-
-### Phase 3: Clinical Records & Cryptography (Weeks 7-9)
-*   **Step 3.1**: Integrate `boto3` for AWS KMS envelope encryption.
-*   **Step 3.2**: Build custom SQLAlchemy types or service-layer interceptors to automatically encrypt/decrypt `clinical_records` fields.
-*   **Step 3.3**: Implement the Immutable Security Audit Log trigger for all clinical reads/writes.
-*   **Step 3.4**: Develop Cross-Branch Emergency Access endpoints.
-
-### Phase 4: Frontend PWA & Offline Resiliency (Weeks 10-12)
-*   **Step 4.1**: Scaffold Vite + React SPA with TailwindCSS and Radix UI.
-*   **Step 4.2**: Implement Workbox for Service Worker registration and static asset caching.
-*   **Step 4.3**: Integrate Dexie.js. Build a background sync hook that downloads the current day's schedule to IndexedDB upon receptionist/doctor login.
-*   **Step 4.4**: Implement the "Offline Mode" UI banner and read-only fallback logic when `navigator.onLine` is false.
-
-### Phase 5: Notification Failover & Integrations (Weeks 13-14)
-*   **Step 5.1**: Define the `NotificationService` interface (Strategy Pattern).
-*   **Step 5.2**: Implement concrete adapters: `WhatsAppCloudAPIClient`, `TermiiSMSClient`, `InfobipSMSClient`.
-*   **Step 5.3**: Configure Celery workers to execute the 15-second timeout failover chain.
-*   **Step 5.4**: Wire notification triggers to appointment state changes (Booked, Cancelled, Reminders).
-
-### Phase 6: Testing, UAT & Deployment (Weeks 15-16)
-*   **Step 6.1**: Execute Integration Tests (specifically testing DB lock contention and KMS decryption).
-*   **Step 6.2**: Execute Load Testing (k6) to verify sub-2.0s search latency (NFR-001).
-*   **Step 6.3**: Deploy PWA to S3/CloudFront and Backend to ECS.
-*   **Step 6.4**: Pilot rollout at Branch A.
-
----
-
-## 6. Critical Technical Decisions & Trade-offs
-
-Coding agents must respect the following architectural constraints established in the ADRs:
-
-1.  **Relational Rigidity over NoSQL Flexibility (ADR-001)**: PostgreSQL was chosen explicitly for its native row-level locking. Do not attempt to implement application-level mutexes (e.g., Redis Redlock) for scheduling; rely entirely on DB transactions.
-2.  **Client-Side Rendering over SSR (ADR-002)**: The frontend must be a static SPA. Do not introduce Next.js SSR or Node.js server components. The offline requirement (NFR-004) dictates that the app shell must run entirely in the browser via Service Workers.
-3.  **Searchability vs. Privacy (ADR-003)**: Because clinical notes are encrypted at the application layer, standard SQL `LIKE` searches on medical text are impossible. Do not attempt to write SQL queries filtering by diagnosis text. All searches must be performed on unencrypted metadata (e.g., `patient_id`, `created_at`).
-4.  **Async Notification Offloading (ADR-004)**: Never execute external HTTP requests to WhatsApp or SMS gateways synchronously within a FastAPI route. All notifications must be pushed to the Redis queue to ensure API response times remain under the 3.0s threshold.
+| **PostgreSQL over MongoDB** | *Trade-off*: Requires rigid schema migrations.<br>*Constraint*: Must prevent double-bookings. | MongoDB lacks native, simple cross-collection row-level locks. PostgreSQL's `SELECT ... FOR UPDATE` guarantees atomic scheduling integrity (ADR-001). |
+| **React PWA over Next.js SSR** | *Trade-off*: Slower initial JS parse, poor SEO.<br>*Constraint*: Must survive local internet drops. | SSR requires a constant server connection. A static PWA allows Service Workers to serve the app shell and IndexedDB to serve cached schedules entirely offline (ADR-002). |
+| **App-Level Encryption over DB TDE** | *Trade-off*: Cannot use SQL `LIKE` searches on clinical notes.<br>*Constraint*: DB Admins must not read medical data. | Transparent Data Encryption (TDE) decrypts data for anyone with DB access. App-level encryption ensures true separation of concerns and strict NDPR compliance (ADR-003). |
+| **WhatsApp-First OTP Routing** | *Trade-off*: Increased backend complexity to manage failovers.<br>*Constraint*: High SMS costs and DND blocks in Nigeria. | WhatsApp is significantly cheaper and bypasses telecom DND lists. Termii SMS acts as a highly reliable, localized fallback (ADR-004). |
+| **Payment State Placeholders** | *Trade-off*: Adds unused columns in Phase 1.<br>*Constraint*: Prevent massive schema rewrites in Phase 2. | Adding `payment_state` enums now ensures the database is ready for Paystack/Flutterwave integration without requiring downtime migrations later (INT-005). |
