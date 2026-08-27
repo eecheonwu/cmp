@@ -1,296 +1,242 @@
 # Clinic Modernization Platform (CMP) — Exhaustive Task Plan
 
-This document outlines the chronological, actionable development tasks required to implement the Clinic Modernization Platform (CMP) based on the provided architecture, ADRs, and technical specifications.
+This document provides a chronological, actionable development plan to implement the CMP based on the provided architecture, ADRs, and technical specifications. 
 
 ---
 
 ## Phase 1: Foundation & Infrastructure Setup
 
-Establish the core repository, environment variables, and external service connections (Redis, PostgreSQL, AWS KMS).
+Establish the monorepo structure, local development environment, and core dependencies.
 
-- [ ] **Task 1.1: Initialize Monorepo Structure**
-  - Create the base directory structure for `backend/` and `frontend/`.
-  - Initialize Git repository and `.gitignore`.
+- [ ] **Task 1.1: Initialize Monorepo & Version Control**
+  - Initialize Git repository and define folder structure (`/backend`, `/frontend`, `/infrastructure`).
   - **Files**: `.gitignore`, `README.md`
-- [ ] **Task 1.2: Setup Backend Environment & Dependencies**
-  - Initialize Python 3.12 environment (e.g., using `Poetry` or `venv`).
-  - Install core dependencies: `fastapi`, `uvicorn`, `sqlalchemy`, `alembic`, `psycopg2-binary`, `redis`, `celery`, `boto3` (for AWS KMS), `cryptography`, `pyjwt`, `pydantic-settings`.
-  - **Files**: `backend/pyproject.toml` or `backend/requirements.txt`, `backend/core/config.py`
-- [ ] **Task 1.3: Configure Docker Compose for Local Development**
-  - Set up local PostgreSQL 16, Redis, and a mock AWS KMS container (e.g., LocalStack) for local testing.
-  - **Files**: `docker-compose.yml`, `backend/.env.example`
-- [ ] **Task 1.4: Setup Frontend Environment & Dependencies**
-  - Initialize Vite + React project with TypeScript.
-  - Install dependencies: `react-router-dom`, `dexie`, `workbox-window`, `vite-plugin-pwa`, `tailwindcss`, `axios`.
+- [ ] **Task 1.2: Setup Local Infrastructure (Docker Compose)**
+  - Configure PostgreSQL 16+ and Redis for local development.
+  - **Files**: `docker-compose.yml`
+- [ ] **Task 1.3: Backend Project Initialization (FastAPI)**
+  - Setup Python 3.12 environment, install FastAPI, Uvicorn, SQLAlchemy, Alembic, Celery, Redis, and Boto3 (for AWS KMS).
+  - **Files**: `backend/pyproject.toml` or `backend/requirements.txt`, `backend/main.py`
+- [ ] **Task 1.4: Frontend Project Initialization (Vite + React)**
+  - Scaffold React app using Vite. Install TailwindCSS, React Router, Dexie.js, Axios, and Workbox.
   - **Files**: `frontend/package.json`, `frontend/vite.config.ts`, `frontend/tailwind.config.js`
 
 ---
 
-## Phase 2: Database & ORM Layer (ADR-001)
+## Phase 2: Database, ORM & Cryptography (Backend)
 
-Implement the PostgreSQL schema, SQLAlchemy models, and Alembic migrations.
+Implement the database schema, application-level encryption (ADR-003), and Alembic migrations.
 
-- [ ] **Task 2.1: Initialize Alembic & Database Connection**
-  - Configure SQLAlchemy async engine and session maker.
-  - Initialize Alembic for schema migrations.
-  - **Files**: `backend/db/session.py`, `backend/alembic.ini`, `backend/alembic/env.py`
-- [ ] **Task 2.2: Create Base Enums & User Models**
-  - Define `UserRole`, `AppointmentStatus`, `PaymentStatus` enums.
-  - Create `User` and `PatientProfile` SQLAlchemy models.
-  - **Files**: `backend/models/enums.py`, `backend/models/user.py`
-- [ ] **Task 2.3: Create Scheduling Models**
-  - Create `DoctorAvailability` model with `start_datetime` and `end_datetime` constraints.
-  - Create `Appointment` model with foreign keys to `User` (doctor and patient).
-  - **Files**: `backend/models/scheduling.py`
-- [ ] **Task 2.4: Create Clinical & Security Models**
-  - Create `ClinicalRecord` model with `encrypted_notes`, `encrypted_diagnosis`, `encrypted_prescriptions`, and `kms_key_version`.
-  - Create `SecurityAuditLog` model for immutable tracking (NFR-007).
-  - Create `VerificationOTP` model for channel-agnostic verification.
-  - **Files**: `backend/models/clinical.py`, `backend/models/security.py`
-- [ ] **Task 2.5: Generate and Apply Initial Migration**
-  - Run Alembic to generate the initial schema migration script and apply it to the local database.
-  - **Files**: `backend/alembic/versions/001_initial_schema.py`
+- [ ] **Task 2.1: Implement KMS Envelope Encryption Utility**
+  - Create a utility to interface with AWS KMS (`GenerateDataKey`, `Decrypt`) and perform AES-256-GCM encryption/decryption.
+  - **Files**: `backend/core/security/kms_client.py`, `backend/core/security/crypto.py`
+  - *Security*: Ensure the KMS client uses IAM roles and never hardcodes credentials.
+- [ ] **Task 2.2: Create Custom SQLAlchemy Encrypted Column Type**
+  - Implement a custom SQLAlchemy TypeDecorator that automatically encrypts data on `INSERT`/`UPDATE` and decrypts on `SELECT`.
+  - **Files**: `backend/db/types/encrypted_string.py`
+  <details><summary>Code Snippet: Encrypted Type</summary>
+  
+  ```python
+  from sqlalchemy.types import TypeDecorator, String
+  from backend.core.security.crypto import encrypt_data, decrypt_data
+
+  class EncryptedString(TypeDecorator):
+      impl = String
+      cache_ok = True
+
+      def process_bind_param(self, value, dialect):
+          if value is not None:
+              return encrypt_data(value) # Returns ciphertext + IV + Tag
+          return value
+
+      def process_result_value(self, value, dialect):
+          if value is not None:
+              return decrypt_data(value)
+          return value
+  ```
+  </details>
+
+- [ ] **Task 2.3: Define Core Database Models**
+  - Create SQLAlchemy models for `User`, `PatientProfile`, `DoctorAvailability`, `Appointment`, `VerificationOTP`, and `SecurityAuditLog`.
+  - **Files**: `backend/models/user.py`, `backend/models/scheduling.py`, `backend/models/audit.py`
+- [ ] **Task 2.4: Define Clinical Record Model with Encryption**
+  - Create the `ClinicalRecord` model utilizing the `EncryptedString` type for `notes`, `diagnosis`, and `prescriptions`.
+  - **Files**: `backend/models/clinical.py`
+- [ ] **Task 2.5: Generate and Apply Database Migrations**
+  - Configure Alembic and generate the initial migration script. Apply to local PostgreSQL.
+  - **Files**: `backend/alembic.ini`, `backend/alembic/env.py`, `backend/alembic/versions/001_initial_schema.py`
 
 ---
 
-## Phase 3: Backend Core & Security (ADR-003)
+## Phase 3: Core Services & Background Workers (Backend)
 
-Implement Authentication, RBAC, and Application-Level Column Encryption.
+Implement the business logic services, including the pluggable notification failover (ADR-004) and OTP generation.
 
-- [ ] **Task 3.1: Implement JWT Authentication & RBAC Middleware**
-  - Create utility for hashing passwords (bcrypt) and generating JWTs.
-  - Implement FastAPI dependency `get_current_user` and `RoleChecker` to enforce RBAC (Patient, Receptionist, Doctor, Manager, Admin).
-  - **Files**: `backend/core/security.py`, `backend/api/dependencies/auth.py`
-- [ ] **Task 3.2: Implement AWS KMS Envelope Encryption Utility**
-  - Create a service to fetch Data Encryption Keys (DEK) from AWS KMS.
-  - Implement AES-256-GCM encryption/decryption logic for clinical records.
-  - **Files**: `backend/services/encryption_service.py`
-  - *Code Snippet Reference*:
-    ```python
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    import boto3
-    import os
+- [ ] **Task 3.1: Implement Authentication & RBAC Service**
+  - Create JWT generation/validation logic. Implement FastAPI dependencies for role-based access control (RBAC).
+  - **Files**: `backend/core/security/jwt.py`, `backend/api/dependencies/auth.py`
+  - *Security*: Define strict scopes (`patient`, `receptionist`, `doctor`, `manager`, `admin`).
+- [ ] **Task 3.2: Implement Pluggable Notification Strategy (ADR-004)**
+  - Define the `NotificationService` interface and concrete adapters for WhatsApp, Termii, and Infobip.
+  - **Files**: `backend/services/notifications/base.py`, `backend/services/notifications/whatsapp.py`, `backend/services/notifications/termii.py`, `backend/services/notifications/infobip.py`
+- [ ] **Task 3.3: Setup Celery Workers for Notification Failover**
+  - Configure Celery with Redis broker. Create the async task that attempts WhatsApp -> Termii -> Infobip.
+  - **Files**: `backend/worker/celery_app.py`, `backend/worker/tasks/notifications.py`
+  <details><summary>Code Snippet: Failover Task</summary>
+  
+  ```python
+  @celery_app.task(bind=True, max_retries=3)
+  def send_notification_with_failover(self, phone, message):
+      try:
+          WhatsAppClient().send(phone, message)
+      except WhatsAppDeliveryError:
+          try:
+              TermiiClient().send(phone, message)
+          except TermiiDeliveryError:
+              InfobipClient().send(phone, message)
+  ```
+  </details>
 
-    class KMSEncryptor:
-        def __init__(self):
-            self.kms = boto3.client('kms')
-            self.master_key_id = os.getenv("KMS_MASTER_KEY_ID")
-
-        def encrypt_clinical_data(self, plaintext: str) -> dict:
-            # Generate DEK
-            response = self.kms.generate_data_key(KeyId=self.master_key_id, KeySpec='AES_256')
-            plaintext_dek = response['Plaintext']
-            encrypted_dek = response['CiphertextBlob']
-            
-            # Encrypt data with AES-GCM
-            aesgcm = AESGCM(plaintext_dek)
-            nonce = os.urandom(12)
-            ciphertext = aesgcm.encrypt(nonce, plaintext.encode(), None)
-            
-            return {
-                "ciphertext": nonce + ciphertext, # Prepend nonce for storage
-                "kms_key_version": encrypted_dek.hex()
-            }
-    ```
-- [ ] **Task 3.3: Implement Immutable Audit Logging Service**
-  - Create a utility function to write to `SecurityAuditLog` within the same DB transaction as clinical reads/writes.
+- [ ] **Task 3.4: Implement OTP Verification Engine**
+  - Build logic to generate 6-digit OTPs, hash them before DB storage, and enqueue the delivery task.
+  - **Files**: `backend/services/otp_service.py`
+- [ ] **Task 3.5: Implement Immutable Audit Logging Service**
+  - Create a service that writes to `security_audit_logs` within the current database session.
   - **Files**: `backend/services/audit_service.py`
 
 ---
 
-## Phase 4: Business Logic & Services (ADR-004)
+## Phase 4: API Routers & Business Logic (Backend)
 
-Implement the core engines: Scheduling (with pessimistic locking), Notifications, and OTP.
+Expose the REST API endpoints and implement the complex scheduling engine.
 
-- [ ] **Task 4.1: Implement Pluggable Notification Strategy (ADR-004)**
-  - Define `NotificationService` interface.
-  - Implement `WhatsAppCloudAPIClient`, `TermiiSMSClient`, and `InfobipSMSClient`.
-  - **Files**: `backend/services/notifications/base.py`, `backend/services/notifications/providers.py`
-- [ ] **Task 4.2: Configure Celery/Redis Background Workers**
-  - Setup Celery app and configure Redis as the broker.
-  - Create the failover task: Try WhatsApp -> wait/catch error -> Try Termii -> Try Infobip.
-  - **Files**: `backend/worker/celery_app.py`, `backend/worker/tasks.py`
-- [ ] **Task 4.3: Implement OTP Verification Engine**
-  - Create logic to generate 6-digit OTP, invalidate old OTPs, and enqueue the delivery task via Celery.
-  - Implement rate-limiting (max 3 requests/15 mins).
-  - **Files**: `backend/services/otp_service.py`
-- [ ] **Task 4.4: Implement Scheduling Engine & Pessimistic Locking**
-  - Create the booking validation logic using `SELECT ... FOR UPDATE`.
-  - **Files**: `backend/services/scheduling_service.py`
-  - *Code Snippet Reference*:
-    ```python
-    async def create_booking(db: AsyncSession, booking_data: AppointmentCreate, user_id: UUID):
-        async with db.begin():
-            # 1. Lock Doctor Availability
-            shift = await db.execute(
-                select(DoctorAvailability)
-                .filter(
-                    DoctorAvailability.doctor_id == booking_data.doctor_id,
-                    DoctorAvailability.start_datetime <= booking_data.start_datetime,
-                    DoctorAvailability.end_datetime >= booking_data.end_datetime,
-                    DoctorAvailability.is_cancelled == False
-                ).with_for_update()
-            )
-            if not shift.scalars().first():
-                raise HTTPException(status_code=400, detail="Doctor unavailable.")
-
-            # 2. Lock Conflicting Appointments
-            conflict = await db.execute(
-                select(Appointment)
-                .filter(
-                    Appointment.doctor_id == booking_data.doctor_id,
-                    Appointment.status == 'booked',
-                    Appointment.start_datetime < booking_data.end_datetime,
-                    Appointment.end_datetime > booking_data.start_datetime
-                ).with_for_update()
-            )
-            if conflict.scalars().first():
-                raise HTTPException(status_code=409, detail="Slot no longer available.")
-
-            # 3. Insert Appointment
-            new_appt = Appointment(**booking_data.dict(), patient_id=user_id)
-            db.add(new_appt)
-            return new_appt
-    ```
-- [ ] **Task 4.5: Implement Progressive Cancellation Penalty Engine**
-  - Create logic to check time until appointment. If < 2 hours, log penalty.
-  - Calculate rolling 90-day incidents and update patient tier (Tier 1, 2, 3).
-  - **Files**: `backend/services/penalty_service.py`
-
----
-
-## Phase 5: API Routers & Controllers
-
-Expose the business logic via FastAPI endpoints.
-
-- [ ] **Task 5.1: Auth & Verification Router**
-  - `POST /api/v1/auth/register`
-  - `POST /api/v1/auth/verify-request`
-  - `POST /api/v1/auth/login`
+- [ ] **Task 4.1: Auth & Verification Router**
+  - Implement `POST /api/v1/auth/verify-request` and `POST /api/v1/auth/login`.
   - **Files**: `backend/api/routers/auth.py`
-- [ ] **Task 5.2: Appointment Booking Router**
-  - `POST /api/v1/appointments` (Requires Patient/Receptionist/Manager role)
-  - `POST /api/v1/appointments/{id}/cancel` (Triggers penalty engine)
-  - `POST /api/v1/appointments/override` (Manager only)
-  - **Files**: `backend/api/routers/appointments.py`
-- [ ] **Task 5.3: Clinical Records Router**
-  - `POST /api/v1/clinical-records` (Doctor only, triggers KMS encryption + Audit log)
-  - `GET /api/v1/clinical-records/patient/{id}` (Doctor only, triggers KMS decryption + Audit log for cross-branch)
+- [ ] **Task 4.2: Scheduling Engine - Pessimistic Locking (FR-019)**
+  - Implement `POST /api/v1/appointments`. Use `with_for_update()` to lock doctor availability and prevent double-booking.
+  - **Files**: `backend/api/routers/appointments.py`, `backend/services/scheduling_service.py`
+  <details><summary>Code Snippet: Pessimistic Lock</summary>
+  
+  ```python
+  async def create_booking(db: AsyncSession, data: BookingCreate):
+      async with db.begin():
+          # Lock shift
+          shift = await db.execute(
+              select(DoctorAvailability)
+              .filter(DoctorAvailability.doctor_id == data.doctor_id)
+              .with_for_update()
+          )
+          # Check conflicts
+          conflict = await db.execute(
+              select(Appointment)
+              .filter(Appointment.doctor_id == data.doctor_id, Appointment.status == 'booked')
+              .filter(Appointment.start_datetime < data.end_datetime)
+              .filter(Appointment.end_datetime > data.start_datetime)
+              .with_for_update()
+          )
+          if conflict.first():
+              raise HTTPException(409, "Slot is no longer available.")
+          # Insert & Commit
+  ```
+  </details>
+
+- [ ] **Task 4.3: Scheduling Engine - Penalty & Cancellation Logic**
+  - Implement `POST /api/v1/appointments/{id}/cancel`. Add logic to calculate time difference, apply Tier 1/2/3 penalties, and update patient profiles.
+  - **Files**: `backend/services/penalty_engine.py`
+- [ ] **Task 4.4: Clinical Records Router (FR-006, FR-007)**
+  - Implement `POST /api/v1/clinical-records` (Doctor only). Ensure audit logs are generated for cross-branch access.
   - **Files**: `backend/api/routers/clinical.py`
-- [ ] **Task 5.4: Front Desk & Reports Router**
-  - `POST /api/v1/appointments/{id}/check-in` (Receptionist only)
-  - `GET /api/v1/reports/daily` (Manager/Admin only)
-  - **Files**: `backend/api/routers/operations.py`
-- [ ] **Task 5.5: Wire up FastAPI Application**
-  - Register all routers, configure CORS (allowing CloudFront domain), and add global exception handlers.
-  - **Files**: `backend/main.py`
+  - *Security*: Enforce `@require_role('doctor')` dependency.
+- [ ] **Task 4.5: Operational Reports Router**
+  - Implement `GET /api/v1/reports/daily-stats` for Branch Managers.
+  - **Files**: `backend/api/routers/reports.py`
 
 ---
 
-## Phase 6: Frontend Foundation (React + Vite PWA) (ADR-002)
+## Phase 5: Frontend Foundation & Offline PWA (React)
 
-Setup the offline-capable SPA.
+Set up the client-side architecture, routing, and offline IndexedDB caching (ADR-002).
 
-- [ ] **Task 6.1: Configure Vite PWA Plugin & Workbox**
-  - Setup `vite-plugin-pwa` to generate service workers and cache static assets.
-  - **Files**: `frontend/vite.config.ts`
-  - *Code Snippet Reference*:
-    ```typescript
-    import { VitePWA } from 'vite-plugin-pwa'
-    export default defineConfig({
-      plugins: [
-        VitePWA({
-          registerType: 'autoUpdate',
-          workbox: {
-            globPatterns: ['**/*.{js,css,html,ico,png,svg}']
-          },
-          manifest: {
-            name: 'Clinic Modernization Platform',
-            short_name: 'CMP',
-            theme_color: '#ffffff',
-            display: 'standalone'
-          }
-        })
-      ]
-    })
-    ```
-- [ ] **Task 6.2: Setup Dexie.js for Offline Caching (NFR-004)**
-  - Define IndexedDB schema for caching the daily schedule.
-  - **Files**: `frontend/src/db/offlineDb.ts`
-  - *Code Snippet Reference*:
-    ```typescript
-    import Dexie, { Table } from 'dexie';
+- [ ] **Task 5.1: Configure Vite PWA & Service Workers**
+  - Setup `vite-plugin-pwa` to cache static assets and intercept API requests for offline fallback.
+  - **Files**: `frontend/vite.config.ts`, `frontend/public/sw.js`
+- [ ] **Task 5.2: Setup Dexie.js for Offline Caching (NFR-004)**
+  - Define the IndexedDB schema for caching the daily appointment list.
+  - **Files**: `frontend/src/db/database.ts`
+  <details><summary>Code Snippet: Dexie Setup</summary>
+  
+  ```typescript
+  import Dexie, { Table } from 'dexie';
 
-    export interface CachedAppointment {
-      id: string;
-      patientName: string;
-      time: string;
-      status: string;
+  export interface CachedAppointment {
+    id: string;
+    patientName: string;
+    time: string;
+    status: string;
+  }
+
+  export class ClinicDB extends Dexie {
+    appointments!: Table<CachedAppointment>;
+
+    constructor() {
+      super('ClinicOfflineDB');
+      this.version(1).stores({
+        appointments: 'id, time, status' // Primary key and indexed props
+      });
     }
+  }
+  export const db = new ClinicDB();
+  ```
+  </details>
 
-    export class ClinicDB extends Dexie {
-      appointments!: Table<CachedAppointment>;
-      constructor() {
-        super('ClinicOfflineDB');
-        this.version(1).stores({
-          appointments: 'id, time, status'
-        });
-      }
-    }
-    export const db = new ClinicDB();
-    ```
-- [ ] **Task 6.3: Implement Axios Interceptor & Network State Hook**
-  - Create an Axios instance that attaches JWT tokens.
-  - Create a `useNetworkStatus` hook to detect offline state and toggle the "Offline Mode - Read Only" UI banner.
-  - **Files**: `frontend/src/api/axios.ts`, `frontend/src/hooks/useNetworkStatus.ts`
+- [ ] **Task 5.3: Axios Interceptors & Auth State**
+  - Configure Axios to attach JWT tokens. Implement a sync mechanism that writes fetched schedules to Dexie.js.
+  - **Files**: `frontend/src/api/axios.ts`, `frontend/src/context/AuthContext.tsx`
+- [ ] **Task 5.4: Offline UI Banner & Network Hook**
+  - Create a custom hook `useNetworkStatus` and a global UI banner that displays "Offline Mode - Read Only" when disconnected.
+  - **Files**: `frontend/src/hooks/useNetworkStatus.ts`, `frontend/src/components/OfflineBanner.tsx`
 
 ---
 
-## Phase 7: Frontend Features & UI Integration
+## Phase 6: Frontend Features & UI Implementation
 
-Build the user interfaces for different roles.
+Build the role-specific dashboards and user interfaces.
 
-- [ ] **Task 7.1: Authentication & Registration UI**
+- [ ] **Task 6.1: Authentication & Registration UI**
   - Build Login, Registration, and OTP Verification screens.
-  - Implement role-based routing (redirect Doctors to Clinical Dashboard, Receptionists to Front Desk).
-  - **Files**: `frontend/src/pages/Auth/`, `frontend/src/routes/ProtectedRoute.tsx`
-- [ ] **Task 7.2: Patient Self-Service Portal**
-  - Build Appointment Booking wizard (Select Branch -> Doctor -> Date -> Time).
-  - Implement UI logic to handle Tier 2 (Soft Flag warning) and Tier 3 (Booking Blocked) responses from the API.
-  - **Files**: `frontend/src/pages/Patient/Booking.tsx`, `frontend/src/pages/Patient/Dashboard.tsx`
-- [ ] **Task 7.3: Receptionist Front Desk Dashboard**
-  - Build daily schedule view.
-  - Implement "Check-In" button and Walk-in registration form.
-  - Implement background sync: fetch daily schedule and write to Dexie.js. Fallback to Dexie if offline.
-  - **Files**: `frontend/src/pages/Reception/Dashboard.tsx`
-- [ ] **Task 7.4: Doctor Clinical Workspace**
-  - Build UI to view checked-in patients.
-  - Build Clinical Consultation Form (Notes, Diagnosis, Prescriptions).
-  - **Files**: `frontend/src/pages/Doctor/Consultation.tsx`
-- [ ] **Task 7.5: Manager Operational Dashboard**
-  - Build charts/tables for daily appointments, utilization, and no-show rates.
-  - **Files**: `frontend/src/pages/Manager/Reports.tsx`
+  - **Files**: `frontend/src/pages/auth/Login.tsx`, `frontend/src/pages/auth/Register.tsx`, `frontend/src/pages/auth/VerifyOTP.tsx`
+- [ ] **Task 6.2: Patient Portal (Mobile Responsive)**
+  - Build the self-service booking flow (Select Branch -> Doctor -> Date -> Time). Implement cancellation with penalty warnings.
+  - **Files**: `frontend/src/pages/patient/Dashboard.tsx`, `frontend/src/pages/patient/BookAppointment.tsx`
+- [ ] **Task 6.3: Receptionist Dashboard (Desktop)**
+  - Build the daily schedule view, walk-in registration form, and check-in toggle. Implement the "Override Restriction" button for Tier 3 patients.
+  - **Files**: `frontend/src/pages/reception/Dashboard.tsx`, `frontend/src/pages/reception/WalkIn.tsx`
+- [ ] **Task 6.4: Doctor Workspace (Tablet/Desktop)**
+  - Build the consultation form (Notes, Diagnosis, Prescriptions). Ensure it reads from/writes to the encrypted API endpoints.
+  - **Files**: `frontend/src/pages/doctor/Schedule.tsx`, `frontend/src/pages/doctor/ConsultationForm.tsx`
+- [ ] **Task 6.5: Manager Operational Dashboard**
+  - Build charts/tables displaying daily appointments, utilization, and no-show rates.
+  - **Files**: `frontend/src/pages/manager/Reports.tsx`
 
 ---
 
-## Phase 8: Testing & Deployment
+## Phase 7: Testing, Security & Deployment
 
-Validate the system against the Test Specification and prepare for rollout.
+Validate the system against the Test Specification and prepare for cloud deployment.
 
-- [ ] **Task 8.1: Write Backend Unit & Integration Tests**
-  - Test pessimistic locking concurrency (TC-02).
-  - Test KMS encryption/decryption logic (TC-05).
-  - Test Progressive Cancellation Penalty Engine (TC-03).
-  - **Files**: `backend/tests/test_scheduling.py`, `backend/tests/test_encryption.py`, `backend/tests/test_penalty.py`
-- [ ] **Task 8.2: Write Frontend & E2E Tests**
-  - Test offline caching behavior (NFR-004) by mocking network failure.
-  - Test Patient Registration and OTP flow (TC-01).
-  - **Files**: `frontend/cypress/e2e/booking.cy.ts`, `frontend/cypress/e2e/offline.cy.ts`
-- [ ] **Task 8.3: Configure CI/CD Pipelines**
-  - Create GitHub Actions (or similar) to run `pytest` and `vitest` on PRs.
-  - Configure build step for Vite PWA and sync to AWS S3.
-  - **Files**: `.github/workflows/ci.yml`, `.github/workflows/deploy-frontend.yml`
-- [ ] **Task 8.4: Infrastructure as Code (AWS Setup)**
-  - Provision AWS RDS (PostgreSQL), ElastiCache (Redis), KMS Keys, S3 Bucket, and CloudFront distribution.
-  - Apply strict IAM policies ensuring only the backend EC2/ECS role can access the KMS `Decrypt` action.
-  - **Files**: `infrastructure/main.tf` (if using Terraform) or manual runbook.
+- [ ] **Task 7.1: Backend Unit & Integration Tests**
+  - Write `pytest` cases for the Penalty Engine, OTP Rate Limiting, and Pessimistic Locking (simulate concurrent requests).
+  - **Files**: `backend/tests/test_scheduling.py`, `backend/tests/test_penalty_engine.py`
+- [ ] **Task 7.2: Security & Compliance Tests (NDPR)**
+  - Write tests verifying that `clinical_records` DB queries return ciphertext, and that Admin JWTs receive HTTP 403 on clinical endpoints.
+  - **Files**: `backend/tests/test_security.py`
+- [ ] **Task 7.3: Frontend E2E Tests**
+  - Write Cypress/Playwright tests for the Patient Booking flow and Receptionist Check-in flow.
+  - **Files**: `frontend/cypress/e2e/booking.cy.ts`, `frontend/cypress/e2e/checkin.cy.ts`
+- [ ] **Task 7.4: Offline Resiliency Testing**
+  - Write a test (or manual test script) to disable network in the browser and verify Dexie.js loads the read-only schedule.
+  - **Files**: `frontend/cypress/e2e/offline.cy.ts`
+- [ ] **Task 7.5: CI/CD Pipeline Setup**
+  - Create GitHub Actions (or similar) to run tests, build the Vite PWA, and deploy static assets to AWS S3/CloudFront. Deploy FastAPI to AWS ECS/AppRunner.
+  - **Files**: `.github/workflows/deploy.yml`, `infrastructure/main.tf` (if using Terraform)
