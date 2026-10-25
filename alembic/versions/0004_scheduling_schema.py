@@ -13,18 +13,18 @@ Revises: 0003_notifications_log
 Create Date: 2026-07-08 21:20:00.000000+01:00
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "0004_scheduling_schema"
-down_revision: Union[str, None] = "0003_notifications_log"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0003_notifications_log"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -240,10 +240,20 @@ def upgrade() -> None:
         ["status"],
     )
 
+    # PostgreSQL GiST exclusion constraint to prevent overlapping bookings
+    # for the same branch and time slot (FR-019 / FR-004). Requires the btree_gist
+    # extension for scalar types in a GiST index.
+    op.execute("CREATE EXTENSION IF NOT EXISTS btree_gist")
+    op.execute(
+        "ALTER TABLE appointments ADD CONSTRAINT appointments_no_double_booking "
+        "EXCLUDE USING gist (branch_id WITH =, tstzrange(start_datetime, end_datetime) WITH &&)"
+    )
+
 
 def downgrade() -> None:
     """Drop tables and enums (in reverse order)."""
     # Drop appointments table and indexes
+    op.execute("ALTER TABLE appointments DROP CONSTRAINT IF EXISTS appointments_no_double_booking")
     op.drop_index("ix_appointments_status", table_name="appointments")
     op.drop_index("ix_appointments_branch", table_name="appointments")
     op.drop_index("ix_appointments_patient", table_name="appointments")

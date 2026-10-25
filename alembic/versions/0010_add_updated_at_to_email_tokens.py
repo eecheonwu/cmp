@@ -20,18 +20,26 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Add updated_at column to email_verification_tokens table if missing."""
-    op.add_column(
-        "email_verification_tokens",
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
-            nullable=True,
-            comment="Token update timestamp (UTC)",
-        ),
-    )
+    conn = op.get_bind()
+    insp = sa.inspect(conn)
+    cols = [c["name"] for c in insp.get_columns("email_verification_tokens")]
+    if "updated_at" not in cols:
+        op.add_column(
+            "email_verification_tokens",
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=True,
+                comment="Token update timestamp (UTC)",
+            ),
+        )
 
 
 def downgrade() -> None:
     """Remove updated_at column from email_verification_tokens table."""
-    op.drop_column("email_verification_tokens", "updated_at")
+    conn = op.get_bind()
+    insp = sa.inspect(conn)
+    cols = [c["name"] for c in insp.get_columns("email_verification_tokens")]
+    if "updated_at" in cols:
+        op.drop_column("email_verification_tokens", "updated_at")
