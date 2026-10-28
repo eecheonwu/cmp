@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Create doctor_availability, appointments tables + enums
 
 Implements Task 3.1 — Scheduling Schema:
@@ -13,10 +14,10 @@ Revises: 0003_notifications_log
 Create Date: 2026-07-08 21:20:00.000000+01:00
 """
 
-from collections.abc import Sequence
-
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from collections.abc import Sequence
 
 from alembic import op
 
