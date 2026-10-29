@@ -1,7 +1,7 @@
-project_id: d2226d1e-f013-47ba-ad2b-bd3d1b829af0
+project_id: 4dc3c46c-72b9-4f84-b04b-44043a41da6b
     version: 1.0.0
     last_synced: ""
-    description: "Local Engineering SSOT synchronized from EIP Web App"
+    description: "Local Engineering SSOT synchronized from ESSOT Web App"
     directories:
       requirements: "SRDs and business requirements"
       architecture: "ADRs, C4, and UML diagrams"
