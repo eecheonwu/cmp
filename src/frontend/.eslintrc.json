@@ -1,6 +1,11 @@
 {
+    "env": {
+        "browser": true,
+        "es2021": true,
+        "node": true
+    },
     "extends": [
-        "@eslint/js/recommended",
+        "eslint:recommended",
         "plugin:react/recommended",
         "plugin:react-hooks/recommended",
         "plugin:@typescript-eslint/recommended"
@@ -16,6 +21,12 @@
         }
     },
     "rules": {
-        "react/react-in-jsx-scope": "off"
+        "react/react-in-jsx-scope": "off",
+        "react/prop-types": "off",
+        "@typescript-eslint/no-unused-vars": "warn",
+        "@typescript-eslint/no-explicit-any": "warn",
+        "no-useless-catch": "warn",
+        "react/no-unescaped-entities": "warn",
+        "no-useless-escape": "warn"
     }
 }
