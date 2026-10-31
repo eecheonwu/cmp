@@ -11,6 +11,7 @@ Implements Task 1.2 — Auth & RBAC user schema:
 Revision ID: 0002_auth_schema
 Revises: 0001_initial_empty
 Create Date: 2026-07-07 22:30:00.000000+01:00
+Create Date: 2026-07-07 22:30:00.000000+01:00
 """
 
 from alembic import op
@@ -20,9 +21,6 @@ from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
-revision: str = "0002_auth_schema"
-down_revision: str | None = "0001_initial_empty"
-branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
@@ -41,16 +39,15 @@ def upgrade() -> None:
             postgresql.UUID(as_uuid=True),
             primary_key=True,
             server_default=sa.text("gen_random_uuid()"),
-            comment="Primary key (UUID v4)",
-        ),
-        sa.Column(
-            "phone_number",
-            sa.String(15),
-            unique=True,
-            nullable=False,
-            comment="Primary contact phone number (unique)",
-        ),
-        sa.Column(
+    """Create user_role enum, users, patient_profiles, verification_otps."""
+    # ── Enum: user_role ──────────────────────────────────────────────
+    # Create enum type if it doesn't exist (using raw SQL for reliability)
+    op.execute("""
+        CREATE TYPE user_role AS ENUM ('patient', 'receptionist', 'doctor', 'manager', 'admin', 'executive');
+    """)
+    # ── Table: users ─────────────────────────────────────────────────
+    op.create_table(
+        "users",
             "email",
             sa.String(255),
             unique=True,
@@ -72,13 +69,13 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
-            nullable=False,
-            comment="Record creation timestamp (UTC)",
         ),
         sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
+            "role",
+            postgresql.ENUM('patient', 'receptionist', 'doctor', 'manager', 'admin', 'executive', name='user_role', create_type=True),
+            nullable=False,
+            comment="RBAC role assignment",
+        ),
             server_default=sa.func.now(),
             nullable=True,
             comment="Record last update timestamp (UTC)",
@@ -187,12 +184,13 @@ def upgrade() -> None:
             "expires_at",
             sa.DateTime(timezone=True),
             nullable=False,
-            comment="OTP expiry timestamp (10-minute TTL from creation)",
-        ),
-        sa.Column(
-            "delivery_channel",
-            sa.String(20),
-            nullable=True,
+    op.drop_table("patient_profiles")
+    op.drop_column("users", "role")
+    op.drop_table("users")
+    op.execute("DROP TYPE user_role")
+
+    # Drop the user_role enum
+    op.execute("DROP TYPE IF EXISTS user_role CASCADE")
             comment="Delivery channel used: 'whatsapp' or 'sms'",
         ),
         sa.Column(
